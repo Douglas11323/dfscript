@@ -1,12 +1,9 @@
 """
 Automação: Diário Oficial de Vila Velha -> Planilha de Movimentações (Execução Local)
 ==================================================================================
-CORREÇÃO: a captura do PDF na Etapa 1 agora trata explicitamente o caso em que
-o Chromium dispara um evento de DOWNLOAD nativo (Content-Disposition: attachment)
-em vez de renderizar o PDF na página/embed. Esse era o motivo mais provável do
-erro "Não foi possível capturar o fluxo do PDF." — o listener de response
-engolia a exceção silenciosamente (try/except Exception: pass) e o PDF nunca
-era mesmo interceptado por response nem encontrado como <embed>/<iframe>.
+Baixa a última edição do Diário Oficial de Vila Velha, extrai o texto do PDF,
+localiza nomeações, exonerações, vacâncias e transferências de cargos
+comissionados/efetivos e consolida tudo em uma planilha Excel local.
 """
 
 import logging
@@ -36,8 +33,6 @@ PASTA_DOWNLOADS.mkdir(parents=True, exist_ok=True)
 PASTA_SAIDA.mkdir(parents=True, exist_ok=True)
 PASTA_LOGS.mkdir(parents=True, exist_ok=True)
 
-# Precisa ser True no GitHub Actions (não há interface gráfica no runner).
-# Só use False localmente, se precisar depurar visualmente.
 HEADLESS = True
 
 # ---------------------------------------------------------------------------
@@ -55,69 +50,59 @@ logging.basicConfig(
 )
 
 # ---------------------------------------------------------------------------
-# PATTERNS (inalterados)
+# PATTERNS
 # ---------------------------------------------------------------------------
 
 PADRAO_EXONERAR = re.compile(
-    r"(?:Art\.\s*\d+º?|DECRETA:?|RESOLVE:?)\s*"
-    r"\bExonerar?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
-    r"(?P<nome>[^,]{3,70}?),\s*"
-    r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,\s*)?"
-    r"(?:do|de)\s+(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comissão\s+de)\s+"
+    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"Exonerar\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
+    r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
+    r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
+    r"(?:do|de)\s+(?:seu\s+)?(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comiss[ãa]o\s+de)\s+"
     r"(?P<cargo>.+?),\s*"
-    r"(?:padrão|símbolo|nível)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
+    r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria>[^.]+?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
 PADRAO_NOMEAR = re.compile(
-    r"(?:Art\.\s*\d+º?|DECRETA:?|RESOLVE:?)\s*"
-    r"\bNomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
-    r"para\s+exercer\s+(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comissão\s+de)?\s*"
+    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
+    r"para\s+exercer\s+(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comiss[ãa]o\s+de)?\s*"
     r"(?P<cargo>.+?),\s*"
-    r"(?:padrão|símbolo|nível)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
+    r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria>[^.]+?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
 PADRAO_VACANCIA = re.compile(
-    r"(?:Art\.\s*\d+º?|DECRETA:?|RESOLVE:?)\s*"
-    r"\bDeclarar\b\s+vac[âa]ncia\s+do\s+cargo\s+efetivo\s+de\s+"
+    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+efetivo\s+de\s+"
     r"(?P<cargo>[^,]+?),\s*"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^,]+?),\s*"
+    r"(?:da|do|no|na)\s+(?P<secretaria>[^,.]+?),\s*"
     r"ocupado\s+pel[oa]\s+[Ss]ervidor[a]?\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
-    r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?",
+    r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+)?",
     re.IGNORECASE | re.DOTALL,
 )
 
 PADRAO_TRANSFERENCIA = re.compile(
-    r"(?:Art\.\s*\d+º?|DECRETA:?|RESOLVE:?)\s*"
-    r"\bTransferir\b\s+a\s+lota[çc][aã]o\s+de\s+"
+    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"Transferir\b\s+a\s+lota[çc][aã]o\s+de\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"ocupante\s+do\s+cargo\s+comissionado\s+de\s+"
     r"(?P<cargo>[^,]+?),\s*"
-    r"(?:padrão|símbolo|nível)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
+    r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]+?)\s+para\s+(?:a|o)\s+"
     r"(?P<secretaria_destino>[^.]+?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
 # ---------------------------------------------------------------------------
-# ETAPA 1: BAIXAR O PDF DEDICADO (CORRIGIDA)
+# ETAPA 1: BAIXAR O PDF DEDICADO
 # ---------------------------------------------------------------------------
 
 def baixar_ultima_edicao() -> Path:
-    """Abre o portal, clica em 'Última Edição' e intercepta o PDF.
-
-    Estratégia em 3 camadas, na ordem de prioridade:
-      1. Evento de DOWNLOAD nativo do Chromium (o mais comum quando o servidor
-         manda Content-Disposition: attachment).
-      2. Response HTTP com content-type application/pdf (site que renderiza
-         inline).
-      3. Elemento <embed>/<iframe>/<object> apontando para o arquivo.
-    Cada camada agora loga o motivo se falhar, em vez de engolir a exceção.
-    """
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=HEADLESS)
         contexto = navegador.new_context(accept_downloads=True)
@@ -139,14 +124,12 @@ def baixar_ultima_edicao() -> Path:
                     if body.startswith(b"%PDF"):
                         buffer_pdf.append(body)
             except Exception as e:
-                # Antes: "except Exception: pass" — escondia o motivo real.
                 logging.debug(f"Response ignorada ({resposta.url}): {e}")
 
         contexto.on("response", processar_resposta)
 
         logging.info("Clicando em 'Última Edição'...")
 
-        # Camada 1: tenta capturar um DOWNLOAD nativo e, em paralelo, uma nova aba.
         download_capturado = None
         nova_aba = None
         try:
@@ -156,13 +139,11 @@ def baixar_ultima_edicao() -> Path:
                         pagina.click(SELETOR_ULTIMA_EDICAO)
                     download_capturado = download_info.value
                 except Exception:
-                    # Não veio download na página atual; talvez tenha vindo na aba nova.
                     pass
             nova_aba = nova_aba_info.value
         except Exception:
             logging.info("Nenhuma nova aba detectada; seguindo com a aba atual.")
 
-        # Se a nova aba abriu, também pode ter disparado um download nela.
         if nova_aba is not None and download_capturado is None:
             try:
                 download_capturado = nova_aba.wait_for_event("download", timeout=8000)
@@ -175,7 +156,6 @@ def baixar_ultima_edicao() -> Path:
             logging.info(f"PDF baixado via evento de download em: {caminho_pdf}")
             return caminho_pdf
 
-        # Camada 2: já deve ter sido preenchido pelo listener de response.
         if nova_aba is not None:
             nova_aba.wait_for_timeout(6000)
 
@@ -185,7 +165,6 @@ def baixar_ultima_edicao() -> Path:
             logging.info(f"PDF baixado via response HTTP em: {caminho_pdf}")
             return caminho_pdf
 
-        # Camada 3: procura embed/iframe/object na nova aba.
         if nova_aba is not None:
             for elem in ["embed", "iframe", "object"]:
                 loc = nova_aba.locator(elem)
@@ -199,7 +178,6 @@ def baixar_ultima_edicao() -> Path:
                             logging.info(f"PDF baixado via elemento <{elem}> em: {caminho_pdf}")
                             return caminho_pdf
 
-            # DEBUG: se chegou até aqui, salva um snapshot da aba para inspeção manual.
             debug_html = PASTA_LOGS / f"debug_pagina_{data_hoje}.html"
             debug_html.write_text(nova_aba.content(), encoding="utf-8")
             logging.error(f"URL da nova aba no momento da falha: {nova_aba.url}")
@@ -212,22 +190,38 @@ def baixar_ultima_edicao() -> Path:
 # ETAPA 2: EXTRAÇÃO DE TEXTO
 # ---------------------------------------------------------------------------
 
+def eh_duas_colunas(pagina, margem_relativa: float = 0.05, limiar_fracao: float = 0.05) -> bool:
+    largura = pagina.width
+    centro = largura / 2
+    zona_min = centro - (largura * margem_relativa)
+    zona_max = centro + (largura * margem_relativa)
+
+    palavras = pagina.extract_words()
+    if not palavras:
+        return False
+
+    cruzando = sum(1 for w in palavras if w["x0"] < zona_max and w["x1"] > zona_min)
+    return (cruzando / len(palavras)) < limiar_fracao
+
+
 def extrair_texto(caminho_pdf: Path) -> str:
-    """Extrai o texto do PDF respeitando o layout em DUAS COLUNAS do Diário Oficial."""
     texto_completo = []
     with pdfplumber.open(caminho_pdf) as pdf:
         for pagina in pdf.pages:
-            largura = pagina.width
-            meio = largura / 2
+            if eh_duas_colunas(pagina):
+                largura = pagina.width
+                meio = largura / 2
 
-            coluna_esquerda = pagina.crop((0, 0, meio, pagina.height))
-            coluna_direita = pagina.crop((meio, 0, largura, pagina.height))
+                coluna_esquerda = pagina.crop((0, 0, meio, pagina.height))
+                coluna_direita = pagina.crop((meio, 0, largura, pagina.height))
 
-            texto_esquerda = coluna_esquerda.extract_text() or ""
-            texto_direita = coluna_direita.extract_text() or ""
+                texto_esquerda = coluna_esquerda.extract_text() or ""
+                texto_direita = coluna_direita.extract_text() or ""
 
-            texto_completo.append(texto_esquerda)
-            texto_completo.append(texto_direita)
+                texto_completo.append(texto_esquerda)
+                texto_completo.append(texto_direita)
+            else:
+                texto_completo.append(pagina.extract_text() or "")
 
     texto_final = "\n".join(texto_completo)
 
@@ -241,13 +235,12 @@ def extrair_texto(caminho_pdf: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def limpar_secretaria(texto: str) -> str:
-    """Extrai apenas o nome oficial da Secretaria, descartando ementas/decretos vizinhos."""
     if not texto:
         return ""
     match = re.search(r"(Secretaria\s+Municipal\s+de\s+[^.─\n]+|Secretaria\s+[^.─\n]+)", texto, re.IGNORECASE)
     if match:
         sec = match.group(1).strip()
-        sec = re.split(r"\.|Art\.|Portaria|Decreto", sec, flags=re.IGNORECASE)[0].strip()
+        sec = re.split(r"\.|Art\.|Portaria|Decreto|\,", sec, flags=re.IGNORECASE)[0].strip()
         return sec
     return texto.strip()
 
@@ -264,7 +257,6 @@ _PALAVRAS_CHAVE_SEPARAR = [
 
 
 def corrigir_espacos_faltantes(texto: str) -> str:
-    """Insere espaço antes de palavras-chave quando coladas ao texto anterior."""
     for palavra in _PALAVRAS_CHAVE_SEPARAR:
         texto = re.sub(rf"(?<=\S)(?={re.escape(palavra)})", " ", texto)
     return texto
@@ -275,65 +267,61 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     texto_limpo = corrigir_espacos_faltantes(texto_limpo)
 
     data_hoje = datetime.now().strftime("%d/%m/%Y")
-    lista_movimentacoes = []
-
-    for m in PADRAO_NOMEAR.finditer(texto_limpo):
-        dados = m.groupdict()
-        sec_limpa = limpar_secretaria(dados.get("secretaria", ""))
-        lista_movimentacoes.append({
-            "Data": data_hoje,
-            "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
-            "Situação": "Nomeado",
-            "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
-            "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
-            "Secretaria": sec_limpa,
-            "Secretaria Destino": "",
-        })
+    encontrados = []
 
     for m in PADRAO_EXONERAR.finditer(texto_limpo):
         dados = m.groupdict()
-        sec_limpa = limpar_secretaria(dados.get("secretaria", ""))
-        lista_movimentacoes.append({
+        encontrados.append((m.start(), {
             "Data": data_hoje,
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Exonerado",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
             "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
-            "Secretaria": sec_limpa,
+            "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
-        })
+        }))
+
+    for m in PADRAO_NOMEAR.finditer(texto_limpo):
+        dados = m.groupdict()
+        encontrados.append((m.start(), {
+            "Data": data_hoje,
+            "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
+            "Situação": "Nomeado",
+            "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
+            "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
+            "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
+            "Secretaria Destino": "",
+        }))
 
     for m in PADRAO_VACANCIA.finditer(texto_limpo):
         dados = m.groupdict()
-        sec_limpa = limpar_secretaria(dados.get("secretaria", ""))
-        lista_movimentacoes.append({
+        encontrados.append((m.start(), {
             "Data": data_hoje,
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Vacância",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
             "Padrão CC": "",
-            "Secretaria": sec_limpa,
+            "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
-        })
+        }))
 
     for m in PADRAO_TRANSFERENCIA.finditer(texto_limpo):
         dados = m.groupdict()
-        sec_origem_limpa = limpar_secretaria(dados.get("secretaria_origem", ""))
-        sec_destino_limpa = limpar_secretaria(dados.get("secretaria_destino", ""))
-        lista_movimentacoes.append({
+        encontrados.append((m.start(), {
             "Data": data_hoje,
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Transferido",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
             "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
-            "Secretaria": sec_origem_limpa,
-            "Secretaria Destino": sec_destino_limpa,
-        })
+            "Secretaria": limpar_secretaria(dados.get("secretaria_origem", "")),
+            "Secretaria Destino": limpar_secretaria(dados.get("secretaria_destino", "")),
+        }))
 
-    return lista_movimentacoes
+    encontrados.sort(key=lambda item: item[0])
+    return [movimentacao for _, movimentacao in encontrados]
 
 # ---------------------------------------------------------------------------
-# ETAPA 4: GERAÇÃO/ATUALIZAÇÃO DA PLANILHA EXCEL LOCAL
+# ETAPA 4: GERAÇÃO/ATUALIZAÇÃO DA PLANILHA EXCEL LOCAL (COM LÓGICA DE ORDEM)
 # ---------------------------------------------------------------------------
 
 CAMINHO_PLANILHA_MESTRE = PASTA_SAIDA / "movimentacoes.xlsx"
@@ -348,9 +336,16 @@ COLUNAS = [
     "Secretaria Destino",
 ]
 
+# Ordem hierárquica das situações para um mesmo servidor
+ORDEM_SITUACAO = {
+    "Exonerado": 1,
+    "Nomeado": 2,
+    "Vacância": 3,
+    "Transferido": 4
+}
+
 
 def carregar_planilha_existente(caminho: Path) -> pd.DataFrame:
-    """Lê a aba 'Movimentações' da planilha mestre local, se ela já existir."""
     if not caminho.exists():
         return pd.DataFrame(columns=COLUNAS)
     try:
@@ -370,10 +365,22 @@ def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path) -> Path:
     df_existente = carregar_planilha_existente(CAMINHO_PLANILHA_MESTRE)
 
     df_total = pd.concat([df_existente, df_novo], ignore_index=True)
+
+    # 1. Deduplicação
     df_total = df_total.drop_duplicates(
-        subset=["Data", "Servidor", "Situação", "Cargo", "Padrão CC", "Secretaria"],
-        keep="first",
+        subset=["Data", "Servidor", "Situação"],
+        keep="last", # Mantém a última extração mais recente
     )
+
+    # 2. ORDENAÇÃO FORÇADA DE NEGÓCIO:
+    # Garante estritamente que para o mesmo Servidor na mesma Data, 'Exonerado' vem ANTES de 'Nomeado'
+    df_total["_Ordem_Situacao"] = df_total["Situação"].map(ORDEM_SITUACAO).fillna(99)
+    
+    # Ordena por Data, Servidor e prioridade da Situação (Exonerado 1º, Nomeado 2º)
+    df_total = df_total.sort_values(
+        by=["Data", "Servidor", "_Ordem_Situacao"],
+        ascending=[True, True, True]
+    ).drop(columns=["_Ordem_Situacao"])
 
     try:
         writer = pd.ExcelWriter(CAMINHO_PLANILHA_MESTRE, engine="openpyxl")
