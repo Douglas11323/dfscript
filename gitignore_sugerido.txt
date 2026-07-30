@@ -1,0 +1,10 @@
+# Sugestão: renomeie este arquivo para ".gitignore" na raiz do repositório
+
+# PDFs baixados diariamente - não precisam ser versionados
+downloads/
+
+# Logs de execução - crescem todo dia, não precisam ir pro repo
+saida/logs/
+
+# Mas a planilha em si (saida/movimentacoes.xlsx) NÃO deve ser ignorada -
+# ela precisa ser commitada a cada execução para manter o histórico.
