@@ -5,5 +5,4 @@ __pycache__/
 *.pyd
 *.log
 downloads/
-saida/
-*.xlsx
+saida/logs/

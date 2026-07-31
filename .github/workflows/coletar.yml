@@ -26,8 +26,8 @@ jobs:
       - name: Instalar dependências Python
         run: pip install -r requirements.txt
 
-      - name: Instalar navegador do Playwright
-        run: playwright install chromium
+      - name: Instalar navegador do Playwright (com dependências de sistema)
+        run: playwright install --with-deps chromium
 
       - name: Rodar script de coleta
         run: python diario_exonerados.py
