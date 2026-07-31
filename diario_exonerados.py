@@ -98,6 +98,15 @@ PADRAO_TRANSFERENCIA = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Cabeçalho de Portaria/Decreto (ex.: "PORTARIA Nº 409/2026", "PORTARIA SEMAS Nº 076/2026",
+# "DECRETO Nº 300/2026"). Os lookaheads negativos evitam confundir com referências feitas
+# dentro do corpo do texto, como "Decreto nº 038/2017 que dispõe..." ou "Decreto nº 072, de...".
+PADRAO_ATO = re.compile(
+    r"\b(?P<tipo>PORTARIA|DECRETO)\s+(?:[A-ZÇÃÕÁÉÍÓÚ]+\s+)?N[ºO°]\.?\s*(?P<numero>\d{1,5}/\d{4})"
+    r"(?!\s*,)(?!\s*que\b)",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # ETAPA 1: BAIXAR O PDF DEDICADO
 # ---------------------------------------------------------------------------
@@ -262,9 +271,35 @@ def corrigir_espacos_faltantes(texto: str) -> str:
     return texto
 
 
+def localizar_atos(texto: str) -> list[tuple[int, str]]:
+    """Retorna a lista (posição, rótulo) de cada cabeçalho de Portaria/Decreto
+    encontrado no texto, na ordem em que aparecem."""
+    atos = []
+    for m in PADRAO_ATO.finditer(texto):
+        tipo = m.group("tipo").capitalize()
+        numero = m.group("numero")
+        atos.append((m.start(), f"{tipo} nº {numero}"))
+    return atos
+
+
+def ato_vigente(posicao: int, atos: list[tuple[int, str]]) -> str:
+    """Dado a posição de um trecho (Exonerar/Nomear/Declarar vacância/Transferir),
+    retorna o rótulo da Portaria/Decreto sob a qual esse trecho está — ou seja, o
+    cabeçalho mais próximo que aparece ANTES dessa posição no texto."""
+    rotulo = ""
+    for pos_ato, label in atos:
+        if pos_ato <= posicao:
+            rotulo = label
+        else:
+            break
+    return rotulo
+
+
 def extrair_movimentacoes(texto: str) -> list[dict]:
     texto_limpo = re.sub(r"\s+", " ", texto)
     texto_limpo = corrigir_espacos_faltantes(texto_limpo)
+
+    atos = localizar_atos(texto_limpo)
 
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     encontrados = []
@@ -273,6 +308,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Exonerado",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
@@ -285,6 +321,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Nomeado",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
@@ -297,6 +334,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Vacância",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
@@ -309,6 +347,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Transferido",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
@@ -328,6 +367,7 @@ CAMINHO_PLANILHA_MESTRE = PASTA_SAIDA / "movimentacoes.xlsx"
 
 COLUNAS = [
     "Data",
+    "Portaria Nº",
     "Servidor",
     "Situação",
     "Cargo",
