@@ -3,9 +3,10 @@ name: Diário Oficial - Coleta Diária
 on:
   schedule:
     # 11h UTC = 8h em Brasília (BRT, UTC-3, sem horário de verão)
-    - cron: '0 11 * * 1-5'
-  workflow_dispatch: {}
+    - cron: '0 11 * * 1-5'   # segunda a sexta
+  workflow_dispatch: {}      # permite rodar manualmente pelo botão "Run workflow"
 
+# Necessário para o job poder commitar de volta no repositório
 permissions:
   contents: write
 

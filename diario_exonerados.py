@@ -415,7 +415,7 @@ def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path) -> Path:
     # 2. ORDENAÇÃO FORÇADA DE NEGÓCIO:
     # Garante estritamente que para o mesmo Servidor na mesma Data, 'Exonerado' vem ANTES de 'Nomeado'
     df_total["_Ordem_Situacao"] = df_total["Situação"].map(ORDEM_SITUACAO).fillna(99)
-    
+
     # Ordena por Data, Servidor e prioridade da Situação (Exonerado 1º, Nomeado 2º)
     df_total = df_total.sort_values(
         by=["Data", "Servidor", "_Ordem_Situacao"],
