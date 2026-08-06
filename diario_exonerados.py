@@ -4,10 +4,54 @@ Automação: Diário Oficial de Vila Velha -> Planilha de Movimentações (Execu
 Baixa a última edição do Diário Oficial de Vila Velha, extrai o texto do PDF,
 localiza nomeações, exonerações, vacâncias e transferências de cargos
 comissionados/efetivos e consolida tudo em uma planilha Excel local.
+
+Changelog desta revisão (correção do bug de extração de 04/08/2026):
+- Reescrita completa da extração de texto de páginas em duas colunas. O
+  heurístico antigo (`eh_duas_colunas`) media a fração de PALAVRAS próximas
+  do centro da página, o que é impreciso: em qualquer página de 2 colunas,
+  dezenas de palavras de AMBAS as colunas caem perto do centro só porque as
+  colunas são estreitas — isso fazia páginas genuinamente de 2 colunas serem
+  classificadas como 1 coluna, usando pdfplumber puro, que intercala linha a
+  linha o texto da coluna esquerda com a da direita. O resultado eram
+  parágrafos de Portarias diferentes grudados um no outro, quebrando todos os
+  regex (nome truncado, cargo/secretaria "vazando" para dentro do texto de
+  outra Portaria, etc.) — exatamente o que aconteceu com a Portaria 413/2026.
+- A nova extração (`extrair_texto`) trabalha linha a linha: agrupa palavras em
+  linhas visuais, detecta a "calha" (gutter) real entre as colunas medindo o
+  menor espaço em branco compartilhado por várias linhas — não um limiar fixo
+  de 50% da largura — e só then divide cada linha exatamente nesse ponto.
+  Páginas de coluna única (ex.: a Resolução do IPVV, que ocupa a largura
+  inteira) continuam sendo extraídas normalmente, sem qualquer corte, porque
+  o algoritmo simplesmente não encontra uma calha estável e cai no
+  `page.extract_text()` padrão. Isso deve funcionar em qualquer edição futura,
+  não só na de hoje.
+- Regex de "Exonerar" corrigido: o conector antes de "cargo" aceitava tanto
+  "do" quanto "de". Como nomes brasileiros frequentemente contêm "de"
+  ("Wanilda DE Andrade..."), o regex não-guloso escolhia a interpretação mais
+  curta e cortava o nome no primeiro "de" que encontrasse — mesmo com texto
+  perfeitamente limpo. Agora o conector exige literalmente "do (seu) cargo",
+  eliminando essa ambiguidade independente da extração de texto.
+- Aceita tanto "Exonerar" quanto o verbo já conjugado "Exonera" (variação já
+  observada em edições anteriores, ver Portaria 405/2026).
+- Captura de cargo/secretaria agora tem limite de tamanho (evita que, em um
+  texto malformado sem pontuação, o regex "vaze" por centenas de caracteres
+  para dentro do próximo artigo/portaria).
+- [NOVO] "Padrão/Símbolo/CC" agora é OPCIONAL em Exonerar e Nomear: cargos
+  EFETIVOS (ex.: Bibliotecário, Professor, etc.) não têm código de padrão/CC
+  — o texto vai direto de "do cargo efetivo de X," para "da Secretaria Y."
+  A regex antiga exigia sempre um token em maiúsculas ([A-Z0-9-]+) entre a
+  vírgula do cargo e a secretaria, o que fazia esses casos não darem match
+  nenhum (nem entravam na planilha, silenciosamente). Ver Portaria 418/2026
+  (exoneração de Aline Larangeira Chahoud, cargo efetivo de Bibliotecário,
+  Secretaria Municipal de Educação — sem padrão CC). Casos com CC (ex.:
+  Portaria 422/2026, "padrão CC-1") continuam funcionando normalmente, pois
+  o grupo opcional é tentado primeiro pelo motor de regex antes de ser
+  pulado.
 """
 
 import logging
 import re
+import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -55,31 +99,41 @@ logging.basicConfig(
 
 PADRAO_EXONERAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
-    r"Exonerar\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
+    r"Exonera(?:r)?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
-    r"(?:do|de)\s+(?:seu\s+)?(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comiss[ãa]o\s+de)\s+"
-    r"(?P<cargo>.+?),\s*"
-    r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]+?)\.",
+    # Conector fixo: só "do (seu) cargo ..." — nunca "de", que é ambíguo com
+    # nomes contendo "de" no meio (ex.: "Wanilda de Andrade Oliveira Pedro").
+    r"\bdo\s+(?:seu\s+)?cargo\s+"
+    r"(?:efetivo\s+de|comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s+"
+    r"(?P<cargo>[^,]{2,90}?),\s*"
+    # Padrão/Símbolo/CC é OPCIONAL: cargos efetivos não têm esse código, o
+    # texto vai direto para "da/do/na Secretaria...". Quando existe (cargos
+    # comissionados), continua sendo capturado normalmente, pois o motor de
+    # regex tenta esse grupo antes de descartá-lo.
+    r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
+    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]{2,150}?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
 PADRAO_NOMEAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
-    r"para\s+exercer\s+(?:[^.]*?\s+)?cargo\s+(?:comissionado\s+de|em\s+comiss[ãa]o\s+de)?\s*"
-    r"(?P<cargo>.+?),\s*"
-    r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]+?)\.",
+    r"para\s+exercer\s+(?:o\s+)?cargo\s+"
+    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
+    r"(?P<cargo>[^,]{2,90}?),\s*"
+    # Mesma correção: Padrão/Símbolo/CC opcional (nomeação para cargo
+    # efetivo — ex.: posse de concursado aprovado — também não tem CC).
+    r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
+    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]{2,150}?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
 PADRAO_VACANCIA = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+efetivo\s+de\s+"
-    r"(?P<cargo>[^,]+?),\s*"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^,.]+?),\s*"
+    r"(?P<cargo>[^,]{2,90}?),\s*"
+    r"(?:da|do|no|na)\s+(?P<secretaria>[^,.]{2,150}?),\s*"
     r"ocupado\s+pel[oa]\s+[Ss]ervidor[a]?\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+)?",
@@ -91,10 +145,10 @@ PADRAO_TRANSFERENCIA = re.compile(
     r"Transferir\b\s+a\s+lota[çc][aã]o\s+de\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"ocupante\s+do\s+cargo\s+comissionado\s+de\s+"
-    r"(?P<cargo>[^,]+?),\s*"
+    r"(?P<cargo>[^,]{2,90}?),\s*"
     r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
-    r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]+?)\s+para\s+(?:a|o)\s+"
-    r"(?P<secretaria_destino>[^.]+?)\.",
+    r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]{2,150}?)\s+para\s+(?:a|o)\s+"
+    r"(?P<secretaria_destino>[^.]{2,150}?)\.",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -196,41 +250,124 @@ def baixar_ultima_edicao() -> Path:
         raise RuntimeError("Não foi possível capturar o fluxo do PDF.")
 
 # ---------------------------------------------------------------------------
-# ETAPA 2: EXTRAÇÃO DE TEXTO
+# ETAPA 2: EXTRAÇÃO DE TEXTO (reescrita — reconstrução por linha/coluna)
 # ---------------------------------------------------------------------------
 
-def eh_duas_colunas(pagina, margem_relativa: float = 0.05, limiar_fracao: float = 0.05) -> bool:
-    largura = pagina.width
-    centro = largura / 2
-    zona_min = centro - (largura * margem_relativa)
-    zona_max = centro + (largura * margem_relativa)
+def _agrupar_linhas(palavras, tolerancia=2.5):
+    linhas = []
+    atual = []
+    topo_atual = None
+    for w in sorted(palavras, key=lambda w: (w["top"], w["x0"])):
+        if topo_atual is None or abs(w["top"] - topo_atual) <= tolerancia:
+            atual.append(w)
+            topo_atual = w["top"] if topo_atual is None else topo_atual
+        else:
+            linhas.append(atual)
+            atual = [w]
+            topo_atual = w["top"]
+    if atual:
+        linhas.append(atual)
+    return linhas
 
+
+def _gaps_da_linha(palavras_ordenadas):
+    """Lista de (tamanho_do_gap, indice_de_corte, x1_antes, x0_depois)."""
+    gaps = []
+    for i, (a, b) in enumerate(zip(palavras_ordenadas, palavras_ordenadas[1:])):
+        gaps.append((b["x0"] - a["x1"], i + 1, a["x1"], b["x0"]))
+    return gaps
+
+
+def extrair_texto_pagina(pagina) -> str:
     palavras = pagina.extract_words()
     if not palavras:
-        return False
+        return pagina.extract_text() or ""
 
-    cruzando = sum(1 for w in palavras if w["x0"] < zona_max and w["x1"] > zona_min)
-    return (cruzando / len(palavras)) < limiar_fracao
+    largura = pagina.width
+    linhas_brutas = _agrupar_linhas(palavras)
+    linhas = []
+    for ln in linhas_brutas:
+        ln_ordenada = sorted(ln, key=lambda w: w["x0"])
+        linhas.append(dict(
+            top=min(w["top"] for w in ln_ordenada),
+            xmin=min(w["x0"] for w in ln_ordenada),
+            xmax=max(w["x1"] for w in ln_ordenada),
+            palavras=ln_ordenada,
+            gaps=_gaps_da_linha(ln_ordenada),
+        ))
+
+    # Passo 1: candidatas óbvias a "linha dividida entre colunas"
+    GAP_GRANDE = max(50, largura * 0.08)
+    candidatas = []
+    for l in linhas:
+        if not l["gaps"]:
+            continue
+        g, _, xa, xb = max(l["gaps"], key=lambda t: t[0])
+        meio_do_gap = (xa + xb) / 2
+        if g > GAP_GRANDE and largura * 0.2 < meio_do_gap < largura * 0.8:
+            candidatas.append((xa, xb))
+
+    MIN_CANDIDATAS = 4
+    if len(candidatas) < MIN_CANDIDATAS:
+        # Página de coluna única: sem corte nenhum.
+        return pagina.extract_text() or ""
+
+    calha_esq = max(c[0] for c in candidatas)
+    calha_dir = min(c[1] for c in candidatas)
+    if calha_esq >= calha_dir:
+        calha_esq = statistics.median(c[0] for c in candidatas)
+        calha_dir = statistics.median(c[1] for c in candidatas)
+    calha_meio = (calha_esq + calha_dir) / 2
+
+    TOLERANCIA_BORDA = 2.0
+    saida = []
+    buffer_esq, buffer_dir = [], []
+    coluna_iniciada = False
+
+    def flush():
+        saida.extend(buffer_esq)
+        saida.extend(buffer_dir)
+        buffer_esq.clear()
+        buffer_dir.clear()
+
+    for l in sorted(linhas, key=lambda l: l["top"]):
+        indice_corte = None
+        for g, idx, xa, xb in l["gaps"]:
+            if xa <= calha_dir and xb >= calha_esq and g >= 6:
+                indice_corte = idx
+                break
+
+        if indice_corte is not None:
+            esq = l["palavras"][:indice_corte]
+            dir_ = l["palavras"][indice_corte:]
+            buffer_esq.append(" ".join(w["text"] for w in esq))
+            buffer_dir.append(" ".join(w["text"] for w in dir_))
+            coluna_iniciada = True
+            continue
+
+        texto_linha = " ".join(w["text"] for w in l["palavras"])
+        if l["xmax"] <= calha_dir + TOLERANCIA_BORDA:
+            buffer_esq.append(texto_linha)
+            coluna_iniciada = True
+        elif l["xmin"] >= calha_esq - TOLERANCIA_BORDA:
+            buffer_dir.append(texto_linha)
+            coluna_iniciada = True
+        else:
+            if not coluna_iniciada:
+                saida.append(texto_linha)
+            else:
+                flush()
+                saida.append(texto_linha)
+
+    flush()
+    return "\n".join(saida)
 
 
 def extrair_texto(caminho_pdf: Path) -> str:
     texto_completo = []
     with pdfplumber.open(caminho_pdf) as pdf:
         for pagina in pdf.pages:
-            if eh_duas_colunas(pagina):
-                largura = pagina.width
-                meio = largura / 2
-
-                coluna_esquerda = pagina.crop((0, 0, meio, pagina.height))
-                coluna_direita = pagina.crop((meio, 0, largura, pagina.height))
-
-                texto_esquerda = coluna_esquerda.extract_text() or ""
-                texto_direita = coluna_direita.extract_text() or ""
-
-                texto_completo.append(texto_esquerda)
-                texto_completo.append(texto_direita)
-            else:
-                texto_completo.append(pagina.extract_text() or "")
+            texto_completo.append(extrair_texto_pagina(pagina))
 
     texto_final = "\n".join(texto_completo)
 
@@ -272,8 +409,6 @@ def corrigir_espacos_faltantes(texto: str) -> str:
 
 
 def localizar_atos(texto: str) -> list[tuple[int, str]]:
-    """Retorna a lista (posição, rótulo) de cada cabeçalho de Portaria/Decreto
-    encontrado no texto, na ordem em que aparecem."""
     atos = []
     for m in PADRAO_ATO.finditer(texto):
         tipo = m.group("tipo").capitalize()
@@ -283,9 +418,6 @@ def localizar_atos(texto: str) -> list[tuple[int, str]]:
 
 
 def ato_vigente(posicao: int, atos: list[tuple[int, str]]) -> str:
-    """Dado a posição de um trecho (Exonerar/Nomear/Declarar vacância/Transferir),
-    retorna o rótulo da Portaria/Decreto sob a qual esse trecho está — ou seja, o
-    cabeçalho mais próximo que aparece ANTES dessa posição no texto."""
     rotulo = ""
     for pos_ato, label in atos:
         if pos_ato <= posicao:
@@ -312,7 +444,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Exonerado",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
-            "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
+            "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
         }))
@@ -325,7 +457,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Nomeado",
             "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
-            "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
+            "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
         }))
@@ -376,7 +508,6 @@ COLUNAS = [
     "Secretaria Destino",
 ]
 
-# Ordem hierárquica das situações para um mesmo servidor
 ORDEM_SITUACAO = {
     "Exonerado": 1,
     "Nomeado": 2,
@@ -406,17 +537,13 @@ def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path) -> Path:
 
     df_total = pd.concat([df_existente, df_novo], ignore_index=True)
 
-    # 1. Deduplicação
     df_total = df_total.drop_duplicates(
         subset=["Data", "Servidor", "Situação"],
-        keep="last", # Mantém a última extração mais recente
+        keep="last",
     )
 
-    # 2. ORDENAÇÃO FORÇADA DE NEGÓCIO:
-    # Garante estritamente que para o mesmo Servidor na mesma Data, 'Exonerado' vem ANTES de 'Nomeado'
     df_total["_Ordem_Situacao"] = df_total["Situação"].map(ORDEM_SITUACAO).fillna(99)
 
-    # Ordena por Data, Servidor e prioridade da Situação (Exonerado 1º, Nomeado 2º)
     df_total = df_total.sort_values(
         by=["Data", "Servidor", "_Ordem_Situacao"],
         ascending=[True, True, True]

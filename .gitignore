@@ -6,3 +6,5 @@ __pycache__/
 *.log
 downloads/
 saida/logs/
+# Temporary Office lock files
+saida/~$*
