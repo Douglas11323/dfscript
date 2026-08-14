@@ -47,6 +47,17 @@ Changelog desta revisão (correção do bug de extração de 04/08/2026):
   Portaria 422/2026, "padrão CC-1") continuam funcionando normalmente, pois
   o grupo opcional é tentado primeiro pelo motor de regex antes de ser
   pulado.
+- [NOVO - 14/08/2026] PADRAO_NOMEAR agora tolera a redação redundante
+  "para exercer o cargo comissionado do cargo comissionado de X" (erro de
+  digitação já observado no próprio Diário — ver Portaria 441/2026, nomeação
+  de Marcos Aurélio dos Santos). Antes desse ajuste, como nenhuma das
+  alternativas do grupo original ("comissionado de" | "em comissão de" | "de")
+  batia logo após a primeira ocorrência de "cargo " nesses casos (o texto
+  seguia com "comissionado do cargo comissionado de..."), o regex falhava
+  silenciosamente e a nomeação não entrava na planilha. Isso não era um bug
+  de extração de texto (colunas/espaçamento) nem de "vazamento" entre atos —
+  o texto já chegava limpo ao regex; o problema era a regex não prever essa
+  duplicação de "cargo comissionado" na redação da própria Portaria.
 """
 
 import logging
@@ -120,6 +131,11 @@ PADRAO_NOMEAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
     r"para\s+exercer\s+(?:o\s+)?cargo\s+"
+    # Tolera a redação redundante "comissionado do cargo comissionado de X"
+    # (erro de digitação observado na Portaria 441/2026). O grupo é opcional
+    # e não afeta casos com redação limpa, já que o motor de regex tenta a
+    # alternativa mais longa primeiro.
+    r"(?:comissionado\s+do\s+cargo\s+)?"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
     r"(?P<cargo>[^,]{2,90}?),\s*"
     # Mesma correção: Padrão/Símbolo/CC opcional (nomeação para cargo
