@@ -2,10 +2,48 @@
 Automação: Diário Oficial de Vila Velha -> Planilha de Movimentações (Execução Local)
 ==================================================================================
 Baixa a última edição do Diário Oficial de Vila Velha, extrai o texto do PDF,
-localiza nomeações, exonerações, vacâncias e transferências de cargos
-comissionados/efetivos e consolida tudo em uma planilha Excel local.
+localiza nomeações, exonerações, vacâncias, transferências e atos de "tornar
+sem efeito" de cargos comissionados/efetivos e consolida tudo em uma planilha
+Excel local.
 
-Changelog desta revisão (correção do bug de extração de 04/08/2026):
+Changelog desta revisão (24/08/2026):
+- [NOVO] Suporte a "Tornar sem efeito". Diários frequentemente republicam um
+  ato anterior anulando parte dele (ver Portaria 453/2026, Art. 4º e 5º, que
+  tornam sem efeito os arts. 4º e 5º da Portaria 451/2026). Esses atos têm
+  redação própria — "Tornar sem efeito o art. Nº da Portaria nº NNN/AAAA que
+  exonerou/nomeou <nome> do/para o cargo..." — e não batiam em nenhuma das
+  regex existentes, então não entravam na planilha (nem com erro, nem com
+  aviso). Novo PADRAO_TORNAR_SEM_EFEITO cobre os dois casos (anulação de
+  exoneração e de nomeação) e grava:
+    * Situação = "Sem Efeito - Exoneração" ou "Sem Efeito - Nomeação"
+    * nova coluna "Ato Original Anulado" com a referência da portaria/nomeação
+      que foi tornada sem efeito (ex.: "Portaria nº 451/2026"), para o leitor
+      da planilha entender que aquele nome NÃO foi de fato exonerado/nomeado
+      naquela data.
+  Nova aba "Sem Efeito" na planilha, junto das já existentes.
+- [CORRIGIDO] Bug do nome do cargo com vírgula interna (ex.: Portaria
+  453/2026, Art. 3º: "...do cargo comissionado de Coordenador de Admissão,
+  Movimentação Funcional e Arquivo, padrão CC-2..."). A regex antiga usava
+  `[^,]{2,90}?` para o grupo de cargo, ou seja, proibia literalmente qualquer
+  vírgula dentro do nome do cargo. Como esse cargo específico tem uma vírgula
+  no meio do próprio nome, o motor de regex parava de capturar em "Coordenador
+  de Admissão" e, a partir daí, o resto do padrão (padrão/CC + Secretaria)
+  nunca batia com o texto seguinte — e a exoneração do Lorran Vianna Silva
+  Bart não entrava na planilha, silenciosamente, como os outros bugs já
+  documentados abaixo. Trocado para `.+?` (não guloso, mas sem proibir
+  vírgula), deixando o motor tentar avançar vírgula por vírgula até achar o
+  ponto em que o resto do padrão realmente casa. Aplicado em Exonerar,
+  Nomear e no novo Tornar sem efeito.
+- [CORRIGIDO] Vazamento no campo Secretaria quando a frase continua depois
+  dela (ex.: "...da Secretaria Municipal de Administração, com efeitos a
+  contar do dia 18/08/2026, de acordo com o Processo nº 87580/2026." — mesma
+  Portaria 453/2026, Art. 3º). Como o efeito colateral da correção acima é
+  que o grupo de cargo/secretaria fica mais "generoso", a Secretaria também
+  passou a puxar essas cláusulas finais junto. Adicionado um recorte
+  específico: a captura da Secretaria para de vez ao encontrar ", com
+  efeitos", ", de acordo com" ou ", conforme" antes do ponto final.
+
+Changelog anterior (correção do bug de extração de 04/08/2026):
 - Reescrita completa da extração de texto de páginas em duas colunas. O
   heurístico antigo (`eh_duas_colunas`) media a fração de PALAVRAS próximas
   do centro da página, o que é impreciso: em qualquer página de 2 colunas,
@@ -36,7 +74,7 @@ Changelog desta revisão (correção do bug de extração de 04/08/2026):
 - Captura de cargo/secretaria agora tem limite de tamanho (evita que, em um
   texto malformado sem pontuação, o regex "vaze" por centenas de caracteres
   para dentro do próximo artigo/portaria).
-- [NOVO] "Padrão/Símbolo/CC" agora é OPCIONAL em Exonerar e Nomear: cargos
+- "Padrão/Símbolo/CC" agora é OPCIONAL em Exonerar e Nomear: cargos
   EFETIVOS (ex.: Bibliotecário, Professor, etc.) não têm código de padrão/CC
   — o texto vai direto de "do cargo efetivo de X," para "da Secretaria Y."
   A regex antiga exigia sempre um token em maiúsculas ([A-Z0-9-]+) entre a
@@ -47,7 +85,7 @@ Changelog desta revisão (correção do bug de extração de 04/08/2026):
   Portaria 422/2026, "padrão CC-1") continuam funcionando normalmente, pois
   o grupo opcional é tentado primeiro pelo motor de regex antes de ser
   pulado.
-- [NOVO - 14/08/2026] PADRAO_NOMEAR agora tolera a redação redundante
+- [14/08/2026] PADRAO_NOMEAR agora tolera a redação redundante
   "para exercer o cargo comissionado do cargo comissionado de X" (erro de
   digitação já observado no próprio Diário — ver Portaria 441/2026, nomeação
   de Marcos Aurélio dos Santos). Antes desse ajuste, como nenhuma das
@@ -108,6 +146,14 @@ logging.basicConfig(
 # PATTERNS
 # ---------------------------------------------------------------------------
 
+# Recorte comum do campo Secretaria: para na primeira vírgula seguida de uma
+# cláusula final conhecida ("com efeitos...", "de acordo com...",
+# "conforme...") ou no ponto final — o que vier primeiro.
+_SECRETARIA_TAIL = (
+    r"(?P<secretaria>[^,.]{2,150}?)"
+    r"(?:,\s*(?:com\s+efeitos\b|de\s+acordo\s+com\b|conforme\b)[^.]*)?\."
+)
+
 PADRAO_EXONERAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Exonera(?:r)?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
@@ -117,13 +163,18 @@ PADRAO_EXONERAR = re.compile(
     # nomes contendo "de" no meio (ex.: "Wanilda de Andrade Oliveira Pedro").
     r"\bdo\s+(?:seu\s+)?cargo\s+"
     r"(?:efetivo\s+de|comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s+"
-    r"(?P<cargo>[^,]{2,90}?),\s*"
+    # Cargo: não-guloso, mas SEM proibir vírgula — alguns cargos têm vírgula
+    # no próprio nome (ex.: "Coordenador de Admissão, Movimentação Funcional
+    # e Arquivo", Portaria 453/2026). O motor tenta a correspondência mais
+    # curta primeiro e só avança além da primeira vírgula se o restante do
+    # padrão não bater ali.
+    r"(?P<cargo>.+?),\s*"
     # Padrão/Símbolo/CC é OPCIONAL: cargos efetivos não têm esse código, o
     # texto vai direto para "da/do/na Secretaria...". Quando existe (cargos
     # comissionados), continua sendo capturado normalmente, pois o motor de
     # regex tenta esse grupo antes de descartá-lo.
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]{2,150}?)\.",
+    r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -137,11 +188,12 @@ PADRAO_NOMEAR = re.compile(
     # alternativa mais longa primeiro.
     r"(?:comissionado\s+do\s+cargo\s+)?"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
-    r"(?P<cargo>[^,]{2,90}?),\s*"
+    # Mesma correção de vírgula interna do cargo (ver PADRAO_EXONERAR acima).
+    r"(?P<cargo>.+?),\s*"
     # Mesma correção: Padrão/Símbolo/CC opcional (nomeação para cargo
     # efetivo — ex.: posse de concursado aprovado — também não tem CC).
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
-    r"(?:da|do|no|na)\s+(?P<secretaria>[^.]{2,150}?)\.",
+    r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -165,6 +217,34 @@ PADRAO_TRANSFERENCIA = re.compile(
     r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]{2,150}?)\s+para\s+(?:a|o)\s+"
     r"(?P<secretaria_destino>[^.]{2,150}?)\.",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# [NOVO] "Tornar sem efeito" — anula um artigo de uma portaria anterior que
+# exonerou ou nomeou alguém. Ex. real (Portaria 453/2026):
+#   "Art. 4º Tornar sem efeito o art. 4º da Portaria nº 451/2026 que exonerou
+#    Claudia Aparecida Salarole Calvi do cargo comissionado de Assistente
+#    Técnico II, padrão CC-4, da Secretaria Municipal de Esporte e Lazer."
+#   "Art. 5º Tornar sem efeito o art. 5º da Portaria nº 451/2026 que nomeou
+#    Claudia Aparecida Salarole Calvi para exercer o cargo comissionado de
+#    Assessor Técnico I, padrão CC-1, da Secretaria Municipal de Esporte e
+#    Lazer."
+# O grupo "verbo" (exonerou | nomeou) diz qual foi o ato original anulado, e
+# "portaria_original" guarda a referência (nº/ano) dessa portaria anterior —
+# ambos vão para a planilha para deixar claro que aquele nome NÃO teve efeito
+# real naquela data.
+PADRAO_TORNAR_SEM_EFEITO = re.compile(
+    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"Tornar\s+sem\s+efeito\s+o\s+art\.?\s*\d+[º°]?\s+da\s+Portaria\s+"
+    r"n[ºo°]?\.?\s*(?P<portaria_original>\d{1,5}/\d{4})\s+que\s+"
+    r"(?P<verbo>exonerou|nomeou)\s+"
+    r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
+    r"(?:para\s+exercer\s+(?:o\s+)?)?"
+    r"(?:do\s+)?cargo\s+"
+    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
+    r"(?P<cargo>.+?),\s*"
+    r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
+    r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -266,7 +346,7 @@ def baixar_ultima_edicao() -> Path:
         raise RuntimeError("Não foi possível capturar o fluxo do PDF.")
 
 # ---------------------------------------------------------------------------
-# ETAPA 2: EXTRAÇÃO DE TEXTO (reescrita — reconstrução por linha/coluna)
+# ETAPA 2: EXTRAÇÃO DE TEXTO (reconstrução por linha/coluna)
 # ---------------------------------------------------------------------------
 
 def _agrupar_linhas(palavras, tolerancia=2.5):
@@ -415,6 +495,7 @@ _PALAVRAS_CHAVE_SEPARAR = [
     "Secretaria",
     "Nomear",
     "Exonerar",
+    "Tornar sem efeito",
 ]
 
 
@@ -463,6 +544,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
+            "Ato Original Anulado": "",
         }))
 
     for m in PADRAO_NOMEAR.finditer(texto_limpo):
@@ -476,6 +558,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
+            "Ato Original Anulado": "",
         }))
 
     for m in PADRAO_VACANCIA.finditer(texto_limpo):
@@ -489,6 +572,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Padrão CC": "",
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
+            "Ato Original Anulado": "",
         }))
 
     for m in PADRAO_TRANSFERENCIA.finditer(texto_limpo):
@@ -502,6 +586,25 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Padrão CC": re.sub(r"\s+", " ", dados["padrao_cc"] or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria_origem", "")),
             "Secretaria Destino": limpar_secretaria(dados.get("secretaria_destino", "")),
+            "Ato Original Anulado": "",
+        }))
+
+    # [NOVO] Tornar sem efeito
+    for m in PADRAO_TORNAR_SEM_EFEITO.finditer(texto_limpo):
+        dados = m.groupdict()
+        verbo = (dados.get("verbo") or "").lower()
+        situacao = "Sem Efeito - Exoneração" if verbo == "exonerou" else "Sem Efeito - Nomeação"
+        portaria_original = dados.get("portaria_original") or ""
+        encontrados.append((m.start(), {
+            "Data": data_hoje,
+            "Portaria Nº": ato_vigente(m.start(), atos),
+            "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
+            "Situação": situacao,
+            "Cargo": re.sub(r"\s+", " ", dados["cargo"] or "").strip(),
+            "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
+            "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
+            "Secretaria Destino": "",
+            "Ato Original Anulado": f"Portaria nº {portaria_original}" if portaria_original else "",
         }))
 
     encontrados.sort(key=lambda item: item[0])
@@ -522,13 +625,16 @@ COLUNAS = [
     "Padrão CC",
     "Secretaria",
     "Secretaria Destino",
+    "Ato Original Anulado",
 ]
 
 ORDEM_SITUACAO = {
     "Exonerado": 1,
     "Nomeado": 2,
     "Vacância": 3,
-    "Transferido": 4
+    "Transferido": 4,
+    "Sem Efeito - Exoneração": 5,
+    "Sem Efeito - Nomeação": 6,
 }
 
 
@@ -536,7 +642,13 @@ def carregar_planilha_existente(caminho: Path) -> pd.DataFrame:
     if not caminho.exists():
         return pd.DataFrame(columns=COLUNAS)
     try:
-        return pd.read_excel(caminho, sheet_name="Movimentações", dtype=str)
+        df = pd.read_excel(caminho, sheet_name="Movimentações", dtype=str)
+        # Planilhas geradas por versões anteriores do script não têm a
+        # coluna "Ato Original Anulado" — cria vazia para manter compatível.
+        for coluna in COLUNAS:
+            if coluna not in df.columns:
+                df[coluna] = ""
+        return df
     except Exception:
         logging.warning("Não foi possível ler a planilha existente; criando do zero.")
         return pd.DataFrame(columns=COLUNAS)
@@ -582,6 +694,9 @@ def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path) -> Path:
             df_total[df_total["Situação"] == "Exonerado"].to_excel(writer, sheet_name="Exonerações", index=False)
             df_total[df_total["Situação"] == "Vacância"].to_excel(writer, sheet_name="Vacâncias", index=False)
             df_total[df_total["Situação"] == "Transferido"].to_excel(writer, sheet_name="Transferências", index=False)
+            df_total[df_total["Situação"].isin(
+                ["Sem Efeito - Exoneração", "Sem Efeito - Nomeação"]
+            )].to_excel(writer, sheet_name="Sem Efeito", index=False)
 
     novos_adicionados = len(df_total) - len(df_existente)
     logging.info(f"Planilha atualizada em: {caminho_saida} "
@@ -599,18 +714,20 @@ def main():
     logging.info("2/4 - Extraindo texto do PDF...")
     texto = extrair_texto(caminho_pdf)
 
-    logging.info("3/4 - Localizando exonerações, vacâncias e nomeações...")
+    logging.info("3/4 - Localizando exonerações, vacâncias, nomeações e atos sem efeito...")
     movimentacoes = extrair_movimentacoes(texto)
 
     nomeados_cnt = sum(1 for m in movimentacoes if m["Situação"] == "Nomeado")
     exonerados_cnt = sum(1 for m in movimentacoes if m["Situação"] == "Exonerado")
     vacancias_cnt = sum(1 for m in movimentacoes if m["Situação"] == "Vacância")
     transferencias_cnt = sum(1 for m in movimentacoes if m["Situação"] == "Transferido")
+    sem_efeito_cnt = sum(1 for m in movimentacoes if m["Situação"].startswith("Sem Efeito"))
 
     logging.info(f"{nomeados_cnt} nomeação(ões) encontrada(s)")
     logging.info(f"{exonerados_cnt} exoneração(ões) encontrada(s)")
     logging.info(f"{vacancias_cnt} vacância(s) encontrada(s)")
     logging.info(f"{transferencias_cnt} transferência(s) de lotação encontrada(s)")
+    logging.info(f"{sem_efeito_cnt} ato(s) 'tornado(s) sem efeito' encontrado(s)")
 
     logging.info("4/4 - Atualizando planilha mestre local...")
     gerar_planilha(movimentacoes, caminho_pdf)
