@@ -612,6 +612,11 @@ def main():
     logging.info("4/4 - Atualizando planilha no Google Sheets...")
     gerar_planilha(movimentacoes, caminho_pdf)
 
+    # Excluir o PDF para não acumular lixo
+    if caminho_pdf and caminho_pdf.exists():
+        caminho_pdf.unlink()
+        logging.info(f"PDF removido com sucesso: {caminho_pdf}")
+
 
 if __name__ == "__main__":
     try:
