@@ -24,11 +24,9 @@ SELETOR_ULTIMA_EDICAO = "#btn1"
 
 DIRETORIO_BASE = Path(__file__).resolve().parent
 PASTA_DOWNLOADS = DIRETORIO_BASE / "downloads"
-PASTA_SAIDA = DIRETORIO_BASE / "saida"
-PASTA_LOGS = PASTA_SAIDA / "logs"
+PASTA_LOGS = DIRETORIO_BASE / "logs"
 
 PASTA_DOWNLOADS.mkdir(parents=True, exist_ok=True)
-PASTA_SAIDA.mkdir(parents=True, exist_ok=True)
 PASTA_LOGS.mkdir(parents=True, exist_ok=True)
 
 HEADLESS = True

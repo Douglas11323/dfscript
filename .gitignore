@@ -5,9 +5,7 @@ __pycache__/
 *.pyd
 *.log
 downloads/
-saida/logs/
-# Temporary Office lock files
-saida/~$*
+logs/
 
 credenciais-gcp.json
 token.json
