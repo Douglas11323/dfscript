@@ -8,3 +8,6 @@ downloads/
 saida/logs/
 # Temporary Office lock files
 saida/~$*
+
+credenciais-gcp.json
+token.json

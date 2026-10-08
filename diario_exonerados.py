@@ -1,107 +1,8 @@
-"""
-Automação: Diário Oficial de Vila Velha -> Planilha de Movimentações (Execução Local)
-==================================================================================
-Baixa a última edição do Diário Oficial de Vila Velha, extrai o texto do PDF,
-localiza nomeações, exonerações, vacâncias, transferências e atos de "tornar
-sem efeito" de cargos comissionados/efetivos e consolida tudo em uma planilha
-Excel local.
-
-Changelog desta revisão (24/08/2026):
-- [NOVO] Suporte a "Tornar sem efeito". Diários frequentemente republicam um
-  ato anterior anulando parte dele (ver Portaria 453/2026, Art. 4º e 5º, que
-  tornam sem efeito os arts. 4º e 5º da Portaria 451/2026). Esses atos têm
-  redação própria — "Tornar sem efeito o art. Nº da Portaria nº NNN/AAAA que
-  exonerou/nomeou <nome> do/para o cargo..." — e não batiam em nenhuma das
-  regex existentes, então não entravam na planilha (nem com erro, nem com
-  aviso). Novo PADRAO_TORNAR_SEM_EFEITO cobre os dois casos (anulação de
-  exoneração e de nomeação) e grava:
-    * Situação = "Sem Efeito - Exoneração" ou "Sem Efeito - Nomeação"
-    * nova coluna "Ato Original Anulado" com a referência da portaria/nomeação
-      que foi tornada sem efeito (ex.: "Portaria nº 451/2026"), para o leitor
-      da planilha entender que aquele nome NÃO foi de fato exonerado/nomeado
-      naquela data.
-  Nova aba "Sem Efeito" na planilha, junto das já existentes.
-- [CORRIGIDO] Bug do nome do cargo com vírgula interna (ex.: Portaria
-  453/2026, Art. 3º: "...do cargo comissionado de Coordenador de Admissão,
-  Movimentação Funcional e Arquivo, padrão CC-2..."). A regex antiga usava
-  `[^,]{2,90}?` para o grupo de cargo, ou seja, proibia literalmente qualquer
-  vírgula dentro do nome do cargo. Como esse cargo específico tem uma vírgula
-  no meio do próprio nome, o motor de regex parava de capturar em "Coordenador
-  de Admissão" e, a partir daí, o resto do padrão (padrão/CC + Secretaria)
-  nunca batia com o texto seguinte — e a exoneração do Lorran Vianna Silva
-  Bart não entrava na planilha, silenciosamente, como os outros bugs já
-  documentados abaixo. Trocado para `.+?` (não guloso, mas sem proibir
-  vírgula), deixando o motor tentar avançar vírgula por vírgula até achar o
-  ponto em que o resto do padrão realmente casa. Aplicado em Exonerar,
-  Nomear e no novo Tornar sem efeito.
-- [CORRIGIDO] Vazamento no campo Secretaria quando a frase continua depois
-  dela (ex.: "...da Secretaria Municipal de Administração, com efeitos a
-  contar do dia 18/08/2026, de acordo com o Processo nº 87580/2026." — mesma
-  Portaria 453/2026, Art. 3º). Como o efeito colateral da correção acima é
-  que o grupo de cargo/secretaria fica mais "generoso", a Secretaria também
-  passou a puxar essas cláusulas finais junto. Adicionado um recorte
-  específico: a captura da Secretaria para de vez ao encontrar ", com
-  efeitos", ", de acordo com" ou ", conforme" antes do ponto final.
-
-Changelog anterior (correção do bug de extração de 04/08/2026):
-- Reescrita completa da extração de texto de páginas em duas colunas. O
-  heurístico antigo (`eh_duas_colunas`) media a fração de PALAVRAS próximas
-  do centro da página, o que é impreciso: em qualquer página de 2 colunas,
-  dezenas de palavras de AMBAS as colunas caem perto do centro só porque as
-  colunas são estreitas — isso fazia páginas genuinamente de 2 colunas serem
-  classificadas como 1 coluna, usando pdfplumber puro, que intercala linha a
-  linha o texto da coluna esquerda com a da direita. O resultado eram
-  parágrafos de Portarias diferentes grudados um no outro, quebrando todos os
-  regex (nome truncado, cargo/secretaria "vazando" para dentro do texto de
-  outra Portaria, etc.) — exatamente o que aconteceu com a Portaria 413/2026.
-- A nova extração (`extrair_texto`) trabalha linha a linha: agrupa palavras em
-  linhas visuais, detecta a "calha" (gutter) real entre as colunas medindo o
-  menor espaço em branco compartilhado por várias linhas — não um limiar fixo
-  de 50% da largura — e só then divide cada linha exatamente nesse ponto.
-  Páginas de coluna única (ex.: a Resolução do IPVV, que ocupa a largura
-  inteira) continuam sendo extraídas normalmente, sem qualquer corte, porque
-  o algoritmo simplesmente não encontra uma calha estável e cai no
-  `page.extract_text()` padrão. Isso deve funcionar em qualquer edição futura,
-  não só na de hoje.
-- Regex de "Exonerar" corrigido: o conector antes de "cargo" aceitava tanto
-  "do" quanto "de". Como nomes brasileiros frequentemente contêm "de"
-  ("Wanilda DE Andrade..."), o regex não-guloso escolhia a interpretação mais
-  curta e cortava o nome no primeiro "de" que encontrasse — mesmo com texto
-  perfeitamente limpo. Agora o conector exige literalmente "do (seu) cargo",
-  eliminando essa ambiguidade independente da extração de texto.
-- Aceita tanto "Exonerar" quanto o verbo já conjugado "Exonera" (variação já
-  observada em edições anteriores, ver Portaria 405/2026).
-- Captura de cargo/secretaria agora tem limite de tamanho (evita que, em um
-  texto malformado sem pontuação, o regex "vaze" por centenas de caracteres
-  para dentro do próximo artigo/portaria).
-- "Padrão/Símbolo/CC" agora é OPCIONAL em Exonerar e Nomear: cargos
-  EFETIVOS (ex.: Bibliotecário, Professor, etc.) não têm código de padrão/CC
-  — o texto vai direto de "do cargo efetivo de X," para "da Secretaria Y."
-  A regex antiga exigia sempre um token em maiúsculas ([A-Z0-9-]+) entre a
-  vírgula do cargo e a secretaria, o que fazia esses casos não darem match
-  nenhum (nem entravam na planilha, silenciosamente). Ver Portaria 418/2026
-  (exoneração de Aline Larangeira Chahoud, cargo efetivo de Bibliotecário,
-  Secretaria Municipal de Educação — sem padrão CC). Casos com CC (ex.:
-  Portaria 422/2026, "padrão CC-1") continuam funcionando normalmente, pois
-  o grupo opcional é tentado primeiro pelo motor de regex antes de ser
-  pulado.
-- [14/08/2026] PADRAO_NOMEAR agora tolera a redação redundante
-  "para exercer o cargo comissionado do cargo comissionado de X" (erro de
-  digitação já observado no próprio Diário — ver Portaria 441/2026, nomeação
-  de Marcos Aurélio dos Santos). Antes desse ajuste, como nenhuma das
-  alternativas do grupo original ("comissionado de" | "em comissão de" | "de")
-  batia logo após a primeira ocorrência de "cargo " nesses casos (o texto
-  seguia com "comissionado do cargo comissionado de..."), o regex falhava
-  silenciosamente e a nomeação não entrava na planilha. Isso não era um bug
-  de extração de texto (colunas/espaçamento) nem de "vazamento" entre atos —
-  o texto já chegava limpo ao regex; o problema era a regex não prever essa
-  duplicação de "cargo comissionado" na redação da própria Portaria.
-"""
-
 import logging
 import re
 import statistics
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -109,15 +10,19 @@ import pandas as pd
 import pdfplumber
 from playwright.sync_api import sync_playwright
 
+import gspread
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+
 # ---------------------------------------------------------------------------
-# CONFIGURAÇÃO DE DIRETÓRIOS E URLS (ESTRUTURA 100% LOCAL)
+# CONFIGURAÇÃO DE DIRETÓRIOS E PLANILHA
 # ---------------------------------------------------------------------------
 
 URL_DIARIO = "https://diariooficial.vilavelha.es.gov.br"
 SELETOR_ULTIMA_EDICAO = "#btn1"
 
 DIRETORIO_BASE = Path(__file__).resolve().parent
-
 PASTA_DOWNLOADS = DIRETORIO_BASE / "downloads"
 PASTA_SAIDA = DIRETORIO_BASE / "saida"
 PASTA_LOGS = PASTA_SAIDA / "logs"
@@ -127,6 +32,8 @@ PASTA_SAIDA.mkdir(parents=True, exist_ok=True)
 PASTA_LOGS.mkdir(parents=True, exist_ok=True)
 
 HEADLESS = True
+
+ID_PLANILHA = "10luQWC_abnlC09R1btbR1Bn9S8n11e-fJeir9ov2UaM"
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -143,12 +50,38 @@ logging.basicConfig(
 )
 
 # ---------------------------------------------------------------------------
+# AUTENTICAÇÃO GOOGLE SHEETS (OAUTH 2.0)
+# ---------------------------------------------------------------------------
+
+ESCOPOS = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
+
+def autenticar_google_sheets():
+    caminho_credencial = DIRETORIO_BASE / "credenciais-gcp.json"
+    caminho_token = DIRETORIO_BASE / "token.json"
+    creds = None
+    
+    if caminho_token.exists():
+        creds = Credentials.from_authorized_user_file(str(caminho_token), ESCOPOS)
+        
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(caminho_credencial), ESCOPOS)
+            creds = flow.run_local_server(port=0)
+            
+        with open(caminho_token, 'w') as token:
+            token.write(creds.to_json())
+            
+    return gspread.authorize(creds)
+
+# ---------------------------------------------------------------------------
 # PATTERNS
 # ---------------------------------------------------------------------------
 
-# Recorte comum do campo Secretaria: para na primeira vírgula seguida de uma
-# cláusula final conhecida ("com efeitos...", "de acordo com...",
-# "conforme...") ou no ponto final — o que vier primeiro.
 _SECRETARIA_TAIL = (
     r"(?P<secretaria>[^,.]{2,150}?)"
     r"(?:,\s*(?:com\s+efeitos\b|de\s+acordo\s+com\b|conforme\b)[^.]*)?\."
@@ -159,20 +92,9 @@ PADRAO_EXONERAR = re.compile(
     r"Exonera(?:r)?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
-    # Conector fixo: só "do (seu) cargo ..." — nunca "de", que é ambíguo com
-    # nomes contendo "de" no meio (ex.: "Wanilda de Andrade Oliveira Pedro").
-    r"\bdo\s+(?:seu\s+)?cargo\s+"
+    r"\b(?:do\s+(?:seu\s+)?|para\s+exercer\s+(?:o\s+)?)cargo\s+"
     r"(?:efetivo\s+de|comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s+"
-    # Cargo: não-guloso, mas SEM proibir vírgula — alguns cargos têm vírgula
-    # no próprio nome (ex.: "Coordenador de Admissão, Movimentação Funcional
-    # e Arquivo", Portaria 453/2026). O motor tenta a correspondência mais
-    # curta primeiro e só avança além da primeira vírgula se o restante do
-    # padrão não bater ali.
     r"(?P<cargo>.+?),\s*"
-    # Padrão/Símbolo/CC é OPCIONAL: cargos efetivos não têm esse código, o
-    # texto vai direto para "da/do/na Secretaria...". Quando existe (cargos
-    # comissionados), continua sendo capturado normalmente, pois o motor de
-    # regex tenta esse grupo antes de descartá-lo.
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
     re.IGNORECASE | re.DOTALL,
@@ -182,16 +104,9 @@ PADRAO_NOMEAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
     r"para\s+exercer\s+(?:o\s+)?cargo\s+"
-    # Tolera a redação redundante "comissionado do cargo comissionado de X"
-    # (erro de digitação observado na Portaria 441/2026). O grupo é opcional
-    # e não afeta casos com redação limpa, já que o motor de regex tenta a
-    # alternativa mais longa primeiro.
     r"(?:comissionado\s+do\s+cargo\s+)?"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
-    # Mesma correção de vírgula interna do cargo (ver PADRAO_EXONERAR acima).
     r"(?P<cargo>.+?),\s*"
-    # Mesma correção: Padrão/Símbolo/CC opcional (nomeação para cargo
-    # efetivo — ex.: posse de concursado aprovado — também não tem CC).
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
     re.IGNORECASE | re.DOTALL,
@@ -220,19 +135,6 @@ PADRAO_TRANSFERENCIA = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# [NOVO] "Tornar sem efeito" — anula um artigo de uma portaria anterior que
-# exonerou ou nomeou alguém. Ex. real (Portaria 453/2026):
-#   "Art. 4º Tornar sem efeito o art. 4º da Portaria nº 451/2026 que exonerou
-#    Claudia Aparecida Salarole Calvi do cargo comissionado de Assistente
-#    Técnico II, padrão CC-4, da Secretaria Municipal de Esporte e Lazer."
-#   "Art. 5º Tornar sem efeito o art. 5º da Portaria nº 451/2026 que nomeou
-#    Claudia Aparecida Salarole Calvi para exercer o cargo comissionado de
-#    Assessor Técnico I, padrão CC-1, da Secretaria Municipal de Esporte e
-#    Lazer."
-# O grupo "verbo" (exonerou | nomeou) diz qual foi o ato original anulado, e
-# "portaria_original" guarda a referência (nº/ano) dessa portaria anterior —
-# ambos vão para a planilha para deixar claro que aquele nome NÃO teve efeito
-# real naquela data.
 PADRAO_TORNAR_SEM_EFEITO = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
     r"Tornar\s+sem\s+efeito\s+o\s+art\.?\s*\d+[º°]?\s+da\s+Portaria\s+"
@@ -248,9 +150,6 @@ PADRAO_TORNAR_SEM_EFEITO = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# Cabeçalho de Portaria/Decreto (ex.: "PORTARIA Nº 409/2026", "PORTARIA SEMAS Nº 076/2026",
-# "DECRETO Nº 300/2026"). Os lookaheads negativos evitam confundir com referências feitas
-# dentro do corpo do texto, como "Decreto nº 038/2017 que dispõe..." ou "Decreto nº 072, de...".
 PADRAO_ATO = re.compile(
     r"\b(?P<tipo>PORTARIA|DECRETO)\s+(?:[A-ZÇÃÕÁÉÍÓÚ]+\s+)?N[ºO°]\.?\s*(?P<numero>\d{1,5}/\d{4})"
     r"(?!\s*,)(?!\s*que\b)",
@@ -282,15 +181,15 @@ def baixar_ultima_edicao() -> Path:
                     body = resposta.body()
                     if body.startswith(b"%PDF"):
                         buffer_pdf.append(body)
-            except Exception as e:
-                logging.debug(f"Response ignorada ({resposta.url}): {e}")
+            except Exception:
+                pass
 
         contexto.on("response", processar_resposta)
 
         logging.info("Clicando em 'Última Edição'...")
-
         download_capturado = None
         nova_aba = None
+        
         try:
             with contexto.expect_event("page", timeout=15000) as nova_aba_info:
                 try:
@@ -312,7 +211,7 @@ def baixar_ultima_edicao() -> Path:
         if download_capturado is not None:
             download_capturado.save_as(str(caminho_pdf))
             navegador.close()
-            logging.info(f"PDF baixado via evento de download em: {caminho_pdf}")
+            logging.info(f"PDF baixado em: {caminho_pdf}")
             return caminho_pdf
 
         if nova_aba is not None:
@@ -321,32 +220,14 @@ def baixar_ultima_edicao() -> Path:
         if buffer_pdf:
             caminho_pdf.write_bytes(buffer_pdf[0])
             navegador.close()
-            logging.info(f"PDF baixado via response HTTP em: {caminho_pdf}")
+            logging.info(f"PDF baixado em: {caminho_pdf}")
             return caminho_pdf
-
-        if nova_aba is not None:
-            for elem in ["embed", "iframe", "object"]:
-                loc = nova_aba.locator(elem)
-                if loc.count() > 0:
-                    url_src = loc.first.get_attribute("src") or loc.first.get_attribute("data")
-                    if url_src:
-                        resp = contexto.request.get(url_src)
-                        if resp.ok and resp.body().startswith(b"%PDF"):
-                            caminho_pdf.write_bytes(resp.body())
-                            navegador.close()
-                            logging.info(f"PDF baixado via elemento <{elem}> em: {caminho_pdf}")
-                            return caminho_pdf
-
-            debug_html = PASTA_LOGS / f"debug_pagina_{data_hoje}.html"
-            debug_html.write_text(nova_aba.content(), encoding="utf-8")
-            logging.error(f"URL da nova aba no momento da falha: {nova_aba.url}")
-            logging.error(f"HTML da nova aba salvo para inspeção em: {debug_html}")
 
         navegador.close()
         raise RuntimeError("Não foi possível capturar o fluxo do PDF.")
 
 # ---------------------------------------------------------------------------
-# ETAPA 2: EXTRAÇÃO DE TEXTO (reconstrução por linha/coluna)
+# ETAPA 2: EXTRAÇÃO DE TEXTO
 # ---------------------------------------------------------------------------
 
 def _agrupar_linhas(palavras, tolerancia=2.5):
@@ -365,14 +246,11 @@ def _agrupar_linhas(palavras, tolerancia=2.5):
         linhas.append(atual)
     return linhas
 
-
 def _gaps_da_linha(palavras_ordenadas):
-    """Lista de (tamanho_do_gap, indice_de_corte, x1_antes, x0_depois)."""
     gaps = []
     for i, (a, b) in enumerate(zip(palavras_ordenadas, palavras_ordenadas[1:])):
         gaps.append((b["x0"] - a["x1"], i + 1, a["x1"], b["x0"]))
     return gaps
-
 
 def extrair_texto_pagina(pagina) -> str:
     palavras = pagina.extract_words()
@@ -392,7 +270,6 @@ def extrair_texto_pagina(pagina) -> str:
             gaps=_gaps_da_linha(ln_ordenada),
         ))
 
-    # Passo 1: candidatas óbvias a "linha dividida entre colunas"
     GAP_GRANDE = max(50, largura * 0.08)
     candidatas = []
     for l in linhas:
@@ -405,7 +282,6 @@ def extrair_texto_pagina(pagina) -> str:
 
     MIN_CANDIDATAS = 4
     if len(candidatas) < MIN_CANDIDATAS:
-        # Página de coluna única: sem corte nenhum.
         return pagina.extract_text() or ""
 
     calha_esq = max(c[0] for c in candidatas)
@@ -413,7 +289,6 @@ def extrair_texto_pagina(pagina) -> str:
     if calha_esq >= calha_dir:
         calha_esq = statistics.median(c[0] for c in candidatas)
         calha_dir = statistics.median(c[1] for c in candidatas)
-    calha_meio = (calha_esq + calha_dir) / 2
 
     TOLERANCIA_BORDA = 2.0
     saida = []
@@ -611,10 +486,8 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     return [movimentacao for _, movimentacao in encontrados]
 
 # ---------------------------------------------------------------------------
-# ETAPA 4: GERAÇÃO/ATUALIZAÇÃO DA PLANILHA EXCEL LOCAL (COM LÓGICA DE ORDEM)
+# ETAPA 4: GERAÇÃO/ATUALIZAÇÃO DA PLANILHA NO GOOGLE SHEETS
 # ---------------------------------------------------------------------------
-
-CAMINHO_PLANILHA_MESTRE = PASTA_SAIDA / "movimentacoes.xlsx"
 
 COLUNAS = [
     "Data",
@@ -637,71 +510,80 @@ ORDEM_SITUACAO = {
     "Sem Efeito - Nomeação": 6,
 }
 
-
-def carregar_planilha_existente(caminho: Path) -> pd.DataFrame:
-    if not caminho.exists():
-        return pd.DataFrame(columns=COLUNAS)
+def atualizar_aba(planilha, nome_aba, df_subset):
     try:
-        df = pd.read_excel(caminho, sheet_name="Movimentações", dtype=str)
-        # Planilhas geradas por versões anteriores do script não têm a
-        # coluna "Ato Original Anulado" — cria vazia para manter compatível.
-        for coluna in COLUNAS:
-            if coluna not in df.columns:
-                df[coluna] = ""
-        return df
-    except Exception:
-        logging.warning("Não foi possível ler a planilha existente; criando do zero.")
-        return pd.DataFrame(columns=COLUNAS)
+        aba = planilha.worksheet(nome_aba)
+    except gspread.exceptions.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=nome_aba, rows=100, cols=len(COLUNAS))
+        aba.append_row(COLUNAS)
+    
+    if df_subset.empty:
+        return
+        
+    registros_existentes = aba.get_all_records()
+    df_existente = pd.DataFrame(registros_existentes)
+    
+    if df_existente.empty:
+        df_existente = pd.DataFrame(columns=COLUNAS)
+    else:
+        # Garantir que as colunas existam
+        for col in COLUNAS:
+            if col not in df_existente.columns:
+                df_existente[col] = ""
+        df_existente = df_existente[COLUNAS]
+        
+    df_total = pd.concat([df_existente, df_subset], ignore_index=True)
+    
+    # Preencher NaN com string vazia
+    df_total = df_total.fillna("")
+    
+    # Remover duplicadas
+    df_total = df_total.drop_duplicates(
+        subset=["Data", "Servidor", "Situação"],
+        keep="last",
+    )
+    
+    # Ordenar
+    df_total["_Ordem_Situacao"] = df_total["Situação"].map(ORDEM_SITUACAO).fillna(99)
+    df_total = df_total.sort_values(
+        by=["Data", "Servidor", "_Ordem_Situacao"],
+        ascending=[True, True, True]
+    ).drop(columns=["_Ordem_Situacao"])
+    
+    # Limpar a aba inteira e reescrever (mais seguro para garantir ordem correta)
+    aba.clear()
+    
+    # Prepara os dados para o gspread (lista de listas)
+    dados_insercao = [df_total.columns.values.tolist()] + df_total.values.tolist()
+    aba.update(range_name='A1', values=dados_insercao)
 
 
-def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path) -> Path:
+def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path):
     df_novo = pd.DataFrame(movimentacoes)
     if df_novo.empty:
         df_novo = pd.DataFrame(columns=COLUNAS)
     else:
         df_novo = df_novo[COLUNAS]
 
-    df_existente = carregar_planilha_existente(CAMINHO_PLANILHA_MESTRE)
+    # Preencher NaN com string vazia
+    df_novo = df_novo.fillna("")
 
-    df_total = pd.concat([df_existente, df_novo], ignore_index=True)
+    logging.info("Conectando ao Google Sheets...")
+    gc = autenticar_google_sheets()
+    planilha = gc.open_by_key(ID_PLANILHA)
+    
+    nome_aba_principal = planilha.worksheets()[0].title
+    # Atualizar aba principal
+    atualizar_aba(planilha, nome_aba_principal, df_novo)
+    
+    if not df_novo.empty:
+        atualizar_aba(planilha, "Nomeações", df_novo[df_novo["Situação"] == "Nomeado"])
+        atualizar_aba(planilha, "Exonerações", df_novo[df_novo["Situação"] == "Exonerado"])
+        atualizar_aba(planilha, "Vacâncias", df_novo[df_novo["Situação"] == "Vacância"])
+        atualizar_aba(planilha, "Transferências", df_novo[df_novo["Situação"] == "Transferido"])
+        atualizar_aba(planilha, "Sem Efeito", df_novo[df_novo["Situação"].isin(["Sem Efeito - Exoneração", "Sem Efeito - Nomeação"])])
 
-    df_total = df_total.drop_duplicates(
-        subset=["Data", "Servidor", "Situação"],
-        keep="last",
-    )
-
-    df_total["_Ordem_Situacao"] = df_total["Situação"].map(ORDEM_SITUACAO).fillna(99)
-
-    df_total = df_total.sort_values(
-        by=["Data", "Servidor", "_Ordem_Situacao"],
-        ascending=[True, True, True]
-    ).drop(columns=["_Ordem_Situacao"])
-
-    try:
-        writer = pd.ExcelWriter(CAMINHO_PLANILHA_MESTRE, engine="openpyxl")
-        caminho_saida = CAMINHO_PLANILHA_MESTRE
-    except PermissionError:
-        hora_atual = datetime.now().strftime("%H%M%S")
-        caminho_saida = PASTA_SAIDA / f"movimentacoes_{hora_atual}.xlsx"
-        logging.warning(f"Arquivo mestre aberto no Excel! Salvando cópia em: {caminho_saida.name}")
-        writer = pd.ExcelWriter(caminho_saida, engine="openpyxl")
-
-    with writer:
-        df_total.to_excel(writer, sheet_name="Movimentações", index=False)
-
-        if not df_total.empty:
-            df_total[df_total["Situação"] == "Nomeado"].to_excel(writer, sheet_name="Nomeações", index=False)
-            df_total[df_total["Situação"] == "Exonerado"].to_excel(writer, sheet_name="Exonerações", index=False)
-            df_total[df_total["Situação"] == "Vacância"].to_excel(writer, sheet_name="Vacâncias", index=False)
-            df_total[df_total["Situação"] == "Transferido"].to_excel(writer, sheet_name="Transferências", index=False)
-            df_total[df_total["Situação"].isin(
-                ["Sem Efeito - Exoneração", "Sem Efeito - Nomeação"]
-            )].to_excel(writer, sheet_name="Sem Efeito", index=False)
-
-    novos_adicionados = len(df_total) - len(df_existente)
-    logging.info(f"Planilha atualizada em: {caminho_saida} "
-                 f"({novos_adicionados} nova(s) linha(s), {len(df_total)} no total)")
-    return caminho_saida
+    logging.info(f"Planilha Google atualizada com sucesso. ID: {ID_PLANILHA}")
 
 # ---------------------------------------------------------------------------
 # EXECUÇÃO PRINCIPAL
@@ -729,7 +611,7 @@ def main():
     logging.info(f"{transferencias_cnt} transferência(s) de lotação encontrada(s)")
     logging.info(f"{sem_efeito_cnt} ato(s) 'tornado(s) sem efeito' encontrado(s)")
 
-    logging.info("4/4 - Atualizando planilha mestre local...")
+    logging.info("4/4 - Atualizando planilha no Google Sheets...")
     gerar_planilha(movimentacoes, caminho_pdf)
 
 
