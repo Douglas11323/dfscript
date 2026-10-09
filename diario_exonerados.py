@@ -112,10 +112,12 @@ PADRAO_NOMEAR = re.compile(
 
 PADRAO_VACANCIA = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
-    r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+efetivo\s+de\s+"
-    r"(?P<cargo>[^,]{2,90}?),\s*"
+    r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+"
+    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
+    r"(?P<cargo>[^,]+),\s*"
+    r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+(?P<secretaria>[^,.]{2,150}?),\s*"
-    r"ocupado\s+pel[oa]\s+[Ss]ervidor[a]?\s+"
+    r"ocupado\s+pel[ao]\s+[Ss]ervidor[ao]?\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+)?",
     re.IGNORECASE | re.DOTALL,
@@ -129,7 +131,7 @@ PADRAO_TRANSFERENCIA = re.compile(
     r"(?P<cargo>[^,]{2,90}?),\s*"
     r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]{2,150}?)\s+para\s+(?:a|o)\s+"
-    r"(?P<secretaria_destino>[^.]{2,150}?)\.",
+    r"(?P<secretaria_destino>[^.]{2,150}?)\.?",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -403,8 +405,21 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
 
     atos = localizar_atos(texto_limpo)
 
-    data_hoje = datetime.now().strftime("%d/%m/%Y")
-    
+    # Buscar a data real no texto do diário
+    data_match = re.search(r"(\d{1,2})\s+de\s+(janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})", texto_limpo, re.IGNORECASE)
+    if data_match:
+        meses = {
+            "janeiro": "01", "fevereiro": "02", "março": "03", "abril": "04",
+            "maio": "05", "junho": "06", "julho": "07", "agosto": "08",
+            "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12"
+        }
+        dia = data_match.group(1).zfill(2)
+        mes = meses.get(data_match.group(2).lower(), "01")
+        ano = data_match.group(3)
+        data_diario = f"{dia}/{mes}/{ano}"
+    else:
+        data_diario = datetime.now().strftime("%d/%m/%Y")
+        
     edicao_match = re.search(r"Edi[cç][ãa]o\s+n[ºo°]\s*(\d+)", texto_limpo, re.IGNORECASE)
     numero_edicao = edicao_match.group(1) if edicao_match else ""
 
@@ -413,7 +428,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     for m in PADRAO_EXONERAR.finditer(texto_limpo):
         dados = m.groupdict()
         encontrados.append((m.start(), {
-            "Data": data_hoje,
+            "Data": data_diario,
             "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
@@ -428,7 +443,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     for m in PADRAO_NOMEAR.finditer(texto_limpo):
         dados = m.groupdict()
         encontrados.append((m.start(), {
-            "Data": data_hoje,
+            "Data": data_diario,
             "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
@@ -443,7 +458,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     for m in PADRAO_VACANCIA.finditer(texto_limpo):
         dados = m.groupdict()
         encontrados.append((m.start(), {
-            "Data": data_hoje,
+            "Data": data_diario,
             "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
@@ -458,7 +473,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     for m in PADRAO_TRANSFERENCIA.finditer(texto_limpo):
         dados = m.groupdict()
         encontrados.append((m.start(), {
-            "Data": data_hoje,
+            "Data": data_diario,
             "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
@@ -477,7 +492,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         situacao = "Sem Efeito - Exoneração" if verbo == "exonerou" else "Sem Efeito - Nomeação"
         portaria_original = dados.get("portaria_original") or ""
         encontrados.append((m.start(), {
-            "Data": data_hoje,
+            "Data": data_diario,
             "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
