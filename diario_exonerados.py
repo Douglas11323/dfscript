@@ -404,12 +404,17 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     atos = localizar_atos(texto_limpo)
 
     data_hoje = datetime.now().strftime("%d/%m/%Y")
+    
+    edicao_match = re.search(r"Edi[cç][ãa]o\s+n[ºo°]\s*(\d+)", texto_limpo, re.IGNORECASE)
+    numero_edicao = edicao_match.group(1) if edicao_match else ""
+
     encontrados = []
 
     for m in PADRAO_EXONERAR.finditer(texto_limpo):
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Exonerado",
@@ -424,6 +429,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Nomeado",
@@ -438,6 +444,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Vacância",
@@ -452,6 +459,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         dados = m.groupdict()
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": "Transferido",
@@ -470,6 +478,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         portaria_original = dados.get("portaria_original") or ""
         encontrados.append((m.start(), {
             "Data": data_hoje,
+            "Edição": numero_edicao,
             "Portaria Nº": ato_vigente(m.start(), atos),
             "Servidor": re.sub(r"\s+", " ", dados["nome"] or "").strip(),
             "Situação": situacao,
@@ -489,6 +498,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
 
 COLUNAS = [
     "Data",
+    "Edição",
     "Portaria Nº",
     "Servidor",
     "Situação",
