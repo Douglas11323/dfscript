@@ -82,7 +82,7 @@ def autenticar_google_sheets():
 
 _SECRETARIA_TAIL = (
     r"(?P<secretaria>[^,.]{2,150}?)"
-    r"(?:,\s*(?:com\s+efeitos\b|de\s+acordo\s+com\b|conforme\b)[^.]*)?\."
+    r"(?:,\s*[^.]*)?\."
 )
 
 PADRAO_EXONERAR = re.compile(
@@ -92,10 +92,10 @@ PADRAO_EXONERAR = re.compile(
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
     r"\b(?:do\s+(?:seu\s+)?|para\s+exercer\s+(?:o\s+)?)cargo\s+"
     r"(?:efetivo\s+de|comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s+"
-    r"(?P<cargo>.+?),\s*"
+    r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 PADRAO_NOMEAR = re.compile(
@@ -104,10 +104,10 @@ PADRAO_NOMEAR = re.compile(
     r"para\s+exercer\s+(?:o\s+)?cargo\s+"
     r"(?:comissionado\s+do\s+cargo\s+)?"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
-    r"(?P<cargo>.+?),\s*"
+    r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 PADRAO_VACANCIA = re.compile(
@@ -137,17 +137,18 @@ PADRAO_TRANSFERENCIA = re.compile(
 
 PADRAO_TORNAR_SEM_EFEITO = re.compile(
     r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
-    r"Tornar\s+sem\s+efeito\s+o\s+art\.?\s*\d+[º°]?\s+da\s+Portaria\s+"
-    r"n[ºo°]?\.?\s*(?P<portaria_original>\d{1,5}/\d{4})\s+que\s+"
-    r"(?P<verbo>exonerou|nomeou)\s+"
+    r"Tornar\s+sem\s+efeito\s+"
+    r"(?:(?:os?\s+arts?\.?\s*[\dº°,\s\be]+\s+(?:da|do)\s+)?(?:a\s+|o\s+)?(?P<tipo_original>Portaria|Decreto|ato)?\s*(?:Municipal\s+)?)?n[ºo°]?\.?\s*(?P<portaria_original>\d{1,5}/\d{4})\s+que\s+"
+    r"(?P<verbo>exonerou|nomeou|exonera(?:r)?|nomear?)\s+"
+    r"(?:[oa]\s+servidor[ao]?\s+)?"
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:para\s+exercer\s+(?:o\s+)?)?"
     r"(?:do\s+)?cargo\s+"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
-    r"(?P<cargo>.+?),\s*"
+    r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 PADRAO_ATO = re.compile(
@@ -167,7 +168,7 @@ def baixar_ultima_edicao() -> Path:
         pagina = contexto.new_page()
 
         logging.info("Acessando o portal do Diário Oficial...")
-        pagina.goto(URL_DIARIO, wait_until="domcontentloaded")
+        pagina.goto(URL_DIARIO, wait_until="domcontentloaded", timeout=60000)
 
         data_hoje = datetime.now().strftime("%Y-%m-%d")
         caminho_pdf = PASTA_DOWNLOADS / f"diario_{data_hoje}.pdf"
@@ -189,24 +190,20 @@ def baixar_ultima_edicao() -> Path:
         logging.info("Clicando em 'Última Edição'...")
         download_capturado = None
         nova_aba = None
-        
-        try:
-            with contexto.expect_event("page", timeout=15000) as nova_aba_info:
-                try:
-                    with pagina.expect_download(timeout=8000) as download_info:
-                        pagina.click(SELETOR_ULTIMA_EDICAO)
-                    download_capturado = download_info.value
-                except Exception:
-                    pass
-            nova_aba = nova_aba_info.value
-        except Exception:
-            logging.info("Nenhuma nova aba detectada; seguindo com a aba atual.")
 
-        if nova_aba is not None and download_capturado is None:
+        try:
+            with pagina.expect_download(timeout=45000) as download_info:
+                pagina.click(SELETOR_ULTIMA_EDICAO)
+            download_capturado = download_info.value
+        except Exception:
+            logging.info("Download direto na página principal não capturado; verificando abas...")
+
+        if download_capturado is None and len(contexto.pages) > 1:
+            nova_aba = contexto.pages[-1]
             try:
-                download_capturado = nova_aba.wait_for_event("download", timeout=8000)
+                download_capturado = nova_aba.wait_for_event("download", timeout=15000)
             except Exception:
-                logging.info("Nenhum evento de download na nova aba (timeout de 8s).")
+                logging.info("Nenhum evento de download na nova aba.")
 
         if download_capturado is not None:
             download_capturado.save_as(str(caminho_pdf))
@@ -421,7 +418,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
         data_diario = datetime.now().strftime("%d/%m/%Y")
         
     edicao_match = re.search(r"Edi[cç][ãa]o\s+n[ºo°]\s*(\d+)", texto_limpo, re.IGNORECASE)
-    numero_edicao = edicao_match.group(1) if edicao_match else ""
+    numero_edicao = int(edicao_match.group(1)) if edicao_match else ""
 
     encontrados = []
 
@@ -489,8 +486,9 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
     for m in PADRAO_TORNAR_SEM_EFEITO.finditer(texto_limpo):
         dados = m.groupdict()
         verbo = (dados.get("verbo") or "").lower()
-        situacao = "Sem Efeito - Exoneração" if verbo == "exonerou" else "Sem Efeito - Nomeação"
+        situacao = "Sem Efeito - Exoneração" if verbo.startswith("exonera") else "Sem Efeito - Nomeação"
         portaria_original = dados.get("portaria_original") or ""
+        tipo_original = (dados.get("tipo_original") or "Portaria").capitalize()
         encontrados.append((m.start(), {
             "Data": data_diario,
             "Edição": numero_edicao,
@@ -501,7 +499,7 @@ def extrair_movimentacoes(texto: str) -> list[dict]:
             "Padrão CC": re.sub(r"\s+", " ", dados.get("padrao_cc") or "").strip(),
             "Secretaria": limpar_secretaria(dados.get("secretaria", "")),
             "Secretaria Destino": "",
-            "Ato Original Anulado": f"Portaria nº {portaria_original}" if portaria_original else "",
+            "Ato Original Anulado": f"{tipo_original} nº {portaria_original}" if portaria_original else "",
         }))
 
     encontrados.sort(key=lambda item: item[0])
@@ -573,12 +571,24 @@ def atualizar_aba(planilha, nome_aba, df_subset):
         ascending=[True, True, True]
     ).drop(columns=["_Ordem_Situacao"])
     
+    # Garantir que números na coluna Edição sejam inteiros (alinhando à direita na planilha)
+    def converter_inteiro(val):
+        try:
+            if val != "" and not pd.isna(val):
+                return int(val)
+        except (ValueError, TypeError):
+            pass
+        return val
+
+    if "Edição" in df_total.columns:
+        df_total["Edição"] = df_total["Edição"].apply(converter_inteiro)
+
     # Limpar a aba inteira e reescrever (mais seguro para garantir ordem correta)
     aba.clear()
     
     # Prepara os dados para o gspread (lista de listas)
     dados_insercao = [df_total.columns.values.tolist()] + df_total.values.tolist()
-    aba.update(range_name='A1', values=dados_insercao)
+    aba.update(range_name='A1', values=dados_insercao, value_input_option='USER_ENTERED')
 
 
 def gerar_planilha(movimentacoes: list[dict], caminho_pdf: Path):
