@@ -86,7 +86,7 @@ _SECRETARIA_TAIL = (
 )
 
 PADRAO_EXONERAR = re.compile(
-    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Exonera(?:r)?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
@@ -99,7 +99,7 @@ PADRAO_EXONERAR = re.compile(
 )
 
 PADRAO_NOMEAR = re.compile(
-    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
     r"para\s+exercer\s+(?:o\s+)?cargo\s+"
     r"(?:comissionado\s+do\s+cargo\s+)?"
@@ -111,7 +111,7 @@ PADRAO_NOMEAR = re.compile(
 )
 
 PADRAO_VACANCIA = re.compile(
-    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+"
     r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
     r"(?P<cargo>[^,]+),\s*"
@@ -120,11 +120,11 @@ PADRAO_VACANCIA = re.compile(
     r"ocupado\s+pel[ao]\s+[Ss]ervidor[ao]?\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+)?",
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 PADRAO_TRANSFERENCIA = re.compile(
-    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Transferir\b\s+a\s+lota[çc][aã]o\s+de\s+"
     r"(?P<nome>[^,]{3,70}?),\s*"
     r"ocupante\s+do\s+cargo\s+comissionado\s+de\s+"
@@ -132,11 +132,11 @@ PADRAO_TRANSFERENCIA = re.compile(
     r"(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*"
     r"(?:da|do|no|na)\s+(?P<secretaria_origem>[^.]{2,150}?)\s+para\s+(?:a|o)\s+"
     r"(?P<secretaria_destino>[^.]{2,150}?)\.?",
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 PADRAO_TORNAR_SEM_EFEITO = re.compile(
-    r"\b(?:Art\.\s*\d+[º°]?|DECRETA:?|RESOLVE:?)\s+"
+    r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Tornar\s+sem\s+efeito\s+"
     r"(?:(?:os?\s+arts?\.?\s*[\dº°,\s\be]+\s+(?:da|do)\s+)?(?:a\s+|o\s+)?(?P<tipo_original>Portaria|Decreto|ato)?\s*(?:Municipal\s+)?)?n[ºo°]?\.?\s*(?P<portaria_original>\d{1,5}/\d{4})\s+que\s+"
     r"(?P<verbo>exonerou|nomeou|exonera(?:r)?|nomear?)\s+"
