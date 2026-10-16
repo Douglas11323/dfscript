@@ -66,8 +66,13 @@ def autenticar_google_sheets():
         
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                logging.warning(f"Token expirado ou revogado ({e}). Solicitando nova autorização...")
+                creds = None
+
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(str(caminho_credencial), ESCOPOS)
             creds = flow.run_local_server(port=0)
             
