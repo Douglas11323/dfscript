@@ -90,13 +90,15 @@ _SECRETARIA_TAIL = (
     r"(?:,\s*[^.]*)?\."
 )
 
+_TIPO_CARGO_PREFIX = r"(?:(?:efetivo|comissionado|em\s+comiss[ãa]o|em\s+comissionado)\s+)?de\s*"
+
 PADRAO_EXONERAR = re.compile(
     r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Exonera(?:r)?\b\s*,?\s*(?:a\s+pedido\s*,?\s*)?"
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:matr[íi]cula\s+n[ºo°]?\.?\s*[\d/]+\s*,?\s*)?"
     r"\b(?:do\s+(?:seu\s+)?|para\s+exercer\s+(?:o\s+)?)cargo\s+"
-    r"(?:efetivo\s+de|comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s+"
+    + _TIPO_CARGO_PREFIX +
     r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
@@ -108,7 +110,7 @@ PADRAO_NOMEAR = re.compile(
     r"Nomear\b\s+(?P<nome>[^,]{3,70}?)\s+"
     r"para\s+exercer\s+(?:o\s+)?cargo\s+"
     r"(?:comissionado\s+do\s+cargo\s+)?"
-    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|de)\s*"
+    + _TIPO_CARGO_PREFIX +
     r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
@@ -118,7 +120,7 @@ PADRAO_NOMEAR = re.compile(
 PADRAO_VACANCIA = re.compile(
     r"\b(?:Art\.\s*\d+[º°.]*|DECRETA:?|RESOLVE:?)\s+"
     r"Declarar\b\s+vac[âa]ncia\s+do\s+cargo\s+"
-    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
+    + _TIPO_CARGO_PREFIX +
     r"(?P<cargo>[^,]+),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+(?P<secretaria>[^,.]{2,150}?),\s*"
@@ -149,7 +151,7 @@ PADRAO_TORNAR_SEM_EFEITO = re.compile(
     r"(?P<nome>[^,]{3,70}?)\s*,?\s*"
     r"(?:para\s+exercer\s+(?:o\s+)?)?"
     r"(?:do\s+)?cargo\s+"
-    r"(?:comissionado\s+de|em\s+comiss[ãa]o\s+de|efetivo\s+de|de)\s*"
+    + _TIPO_CARGO_PREFIX +
     r"(?P<cargo>[^,.]+?),\s*"
     r"(?:(?:padr[ãa]o|s[íi]mbolo|n[íi]vel)?\s*(?P<padrao_cc>[A-Z0-9-]+),\s*)?"
     r"(?:da|do|no|na)\s+" + _SECRETARIA_TAIL,
@@ -368,6 +370,7 @@ _PALAVRAS_CHAVE_SEPARAR = [
     "para exercer",
     "cargo comissionado",
     "cargo em comissão",
+    "cargo em comissionado",
     "padrão",
     "Secretaria",
     "Nomear",
